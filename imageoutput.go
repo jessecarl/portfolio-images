@@ -66,11 +66,20 @@ func (o *ImageOutput) Transform() {
 
 // Saves the modified image to the intended output file at the specified quality
 func (o *ImageOutput) Save(quality int) error {
-	defer o.outFile.Close()
 	opts := new(jpeg.Options)
 	opts.Quality = quality
+	if err := o.outFile.Truncate(0); err != nil {
+		return fmt.Errorf("Error Saving ImageOutput %v: %v", *o, err)
+	}
 	if err := jpeg.Encode(o.outFile, o.modified, opts); err != nil {
 		return fmt.Errorf("Error Saving ImageOutput %v: %v", *o, err)
+	}
+	return nil
+}
+
+func (o *ImageOutput) Close() error {
+	if err := o.outFile.Close(); err != nil {
+		return fmt.Errorf("Error Closing ImageOutput: %v", err)
 	}
 	return nil
 }

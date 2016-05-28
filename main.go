@@ -70,7 +70,12 @@ func main() {
 			err = out.Save(imageQuality)
 			if err != nil {
 				collectedErrors = append(collectedErrors, err)
-				continue
+			}
+
+			// Close the file
+			err = out.Close()
+			if err != nil {
+				collectedErrors = append(collectedErrors, err)
 			}
 		}
 	}
