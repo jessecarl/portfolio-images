@@ -248,14 +248,14 @@ func SaveImages(done <-chan struct{}, errc chan<- error, ready <-chan *ImageOutp
 	}
 }
 
-func abortChan(ec <-chan error) func(func()) chan<- error {
+func abortChan(ec chan<- error) func(func()) chan<- error {
 	return func(fn func()) chan<- error {
 		eoc := make(chan error)
 		go func() {
 			defer close(eoc)
-			for e := range ec {
+			for e := range eoc {
 				fn()
-				eoc <- e
+				ec <- e
 			}
 		}()
 		return eoc
