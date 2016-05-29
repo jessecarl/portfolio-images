@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"gopkg.in/cheggaaa/pb.v1"
 )
 
 func main() {
@@ -46,8 +48,24 @@ func main() {
 		log.Fatalf("No files found for input glob, %q", inputGlob)
 	}
 
+	// Start Progress Bar
+	bar := pb.StartNew(len(inputFiles) * len(imageSizes))
+
 	done := make(chan struct{})
 	errc := make(chan error)
+	abortCh := abortChan(errc)
+	successCh := func() chan<- bool {
+		scs := make(chan bool)
+		go func() {
+			for s := range scs {
+				if s {
+					bar.Increment()
+				}
+			}
+		}()
+		return scs
+	}()
+
 	go func(ec <-chan error) {
 		for err := range ec {
 			log.Printf("[WARNING]: %v", err)
@@ -57,12 +75,13 @@ func main() {
 	// Step One: Open Valid Input Image
 	inputFileCh := QueueImages(done, inputFiles...)
 
+	abortAllSizes := func() { bar.Add(len(imageSizes)) }
 	inputImageCh := make(chan *ImageInput)
 	var inputWg sync.WaitGroup
 	inputWg.Add(workerCount)
 	for i := 0; i < workerCount; i++ {
 		go func() {
-			OpenImages(done, errc, inputFileCh, inputImageCh)
+			OpenImages(done, abortCh(abortAllSizes), inputFileCh, inputImageCh)
 			inputWg.Done()
 		}()
 	}
@@ -72,12 +91,13 @@ func main() {
 	}()
 
 	// Step Two: Open Valid Output File
+	abortOne := func() { bar.Increment() }
 	readyImageCh := make(chan *ImageOutput)
 	var sizeWg sync.WaitGroup
 	sizeWg.Add(workerCount)
 	for i := 0; i < workerCount; i++ {
 		go func() {
-			ReadyImages(done, errc, inputImageCh, readyImageCh, outputDir, forceSave, imageSizes...)
+			ReadyImages(done, abortCh(abortOne), inputImageCh, readyImageCh, outputDir, forceSave, imageSizes...)
 			sizeWg.Done()
 		}()
 	}
@@ -106,13 +126,14 @@ func main() {
 	savedWg.Add(workerCount)
 	for i := 0; i < workerCount; i++ {
 		go func() {
-			SaveImages(done, errc, resizedImageCh, imageQuality)
+			SaveImages(done, errc, resizedImageCh, successCh, imageQuality)
 			savedWg.Done()
 		}()
 	}
 	savedWg.Wait()
 	close(done)
 	close(errc)
+	bar.Finish()
 }
 
 func createOutputDirIfNotExist(outputDir string) error {
@@ -203,23 +224,40 @@ func ResizeImages(done <-chan struct{}, ready <-chan *ImageOutput, resized chan<
 			return
 		}
 	}
-
 }
 
-func SaveImages(done <-chan struct{}, errc chan<- error, ready <-chan *ImageOutput, imageQuality int) {
+func SaveImages(done <-chan struct{}, errc chan<- error, ready <-chan *ImageOutput, successCh chan<- bool, imageQuality int) {
 	for in := range ready {
 		var ec chan<- error
 		var err error
+		var sc chan<- bool
 
 		err = in.Save(imageQuality)
 		if err != nil {
 			ec = errc
+		} else {
+			sc = successCh
 		}
+
 		select {
+		case sc <- true:
 		case ec <- err:
 		case <-done:
 			return
-		default: // to continue
 		}
+	}
+}
+
+func abortChan(ec <-chan error) func(func()) chan<- error {
+	return func(fn func()) chan<- error {
+		eoc := make(chan error)
+		go func() {
+			defer close(eoc)
+			for e := range ec {
+				fn()
+				eoc <- e
+			}
+		}()
+		return eoc
 	}
 }
