@@ -19,7 +19,7 @@ import (
 type ImageOutput struct {
 	original, modified image.Image
 
-	outFile   *os.File
+	outFile   string
 	imageSize ImageSize
 }
 
@@ -33,22 +33,23 @@ func NewImageOutput(in *ImageInput, size ImageSize, outputDir string, force bool
 		return strings.TrimSuffix(name, ext) + suffix + ".jpg"
 	}(filepath.Base(in.Filename), size.Suffix))
 
-	flag := os.O_RDWR | os.O_CREATE | os.O_EXCL // no overwriting
-	if force {
-		flag = os.O_RDWR | os.O_CREATE // open file (truncate once we know we have something to save)
-	}
-	outFile, err := os.OpenFile(filename, flag, 0666)
-	if err != nil {
-		return nil, err
+	// If the file exists but we don't have the force flag, do not proceed
+	info, err := os.Stat(filename)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("Error preparing output file, %q: %v", filename, err)
+	} else if err == nil && !force {
+		return nil, fmt.Errorf("Skipping file, %q: use force (-f) to force overwrite", filename)
+	} else if err == nil && !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("Error preparing output file, %q: cannot overwrite with new image", filename)
 	}
 
 	out := new(ImageOutput)
-	out.Init(in.Clone().Image, outFile, size)
+	out.Init(in.Clone().Image, filename, size)
 
 	return out, nil
 }
 
-func (o *ImageOutput) Init(i image.Image, out *os.File, size ImageSize) {
+func (o *ImageOutput) Init(i image.Image, out string, size ImageSize) {
 	o.original = i
 	o.outFile = out
 	o.imageSize = size
@@ -68,18 +69,16 @@ func (o *ImageOutput) Transform() {
 func (o *ImageOutput) Save(quality int) error {
 	opts := new(jpeg.Options)
 	opts.Quality = quality
-	if err := o.outFile.Truncate(0); err != nil {
-		return fmt.Errorf("Error Saving ImageOutput %v: %v", *o, err)
-	}
-	if err := jpeg.Encode(o.outFile, o.modified, opts); err != nil {
-		return fmt.Errorf("Error Saving ImageOutput %v: %v", *o, err)
-	}
-	return nil
-}
 
-func (o *ImageOutput) Close() error {
-	if err := o.outFile.Close(); err != nil {
-		return fmt.Errorf("Error Closing ImageOutput: %v", err)
+	flag := os.O_RDWR | os.O_CREATE | os.O_TRUNC
+	outFile, err := os.OpenFile(o.outFile, flag, 0666)
+	defer outFile.Close()
+	if err != nil {
+		return fmt.Errorf("Error Saving ImageOutput %v: %v", *o, err)
+	}
+
+	if err := jpeg.Encode(outFile, o.modified, opts); err != nil {
+		return fmt.Errorf("Error Saving ImageOutput %v: %v", *o, err)
 	}
 	return nil
 }
