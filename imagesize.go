@@ -43,26 +43,3 @@ func (iv *ImageSize) Set(value string) error {
 	iv.Size = uint(size)
 	return nil
 }
-
-// So we can parse multiple image versions from flags
-type imageSizeSlice []ImageSize
-
-func (ivs *imageSizeSlice) String() string {
-	s := ""
-	for _, si := range *ivs {
-		s += si.String()
-	}
-	return s
-}
-
-func (ivs *imageSizeSlice) Set(value string) error {
-	for _, s := range strings.Split(value, ",") {
-		iv := ImageSize{}
-		if err := iv.Set(s); err != nil {
-			return fmt.Errorf("ImageSizeSlice Error: unable to set ImageSize %q, %v", s, err)
-		} else {
-			*ivs = append(*ivs, iv)
-		}
-	}
-	return nil
-}

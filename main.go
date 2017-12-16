@@ -11,45 +11,36 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/spf13/pflag"
+
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
 func main() {
-	var (
-		imageSizes   imageSizeSlice
-		inputGlob    string
-		outputDir    string
-		forceSave    bool
-		imageQuality int
-		workerCount  int
-	)
-	flag.Var(&imageSizes, "s", "[required] Image Sizes to be output. Should be of the form \"suffix:size\" where \"suffix\" is added to the base filename when saving this version, and \"size\" defines the maximum square dimension (0 for no resize).")
-	flag.StringVar(&inputGlob, "i", "", "[required] Glob used to find all images to be resized.")
-	flag.StringVar(&outputDir, "o", "", "[required] Output directory to save all generated images to.")
-	flag.BoolVar(&forceSave, "f", false, "Force overwrite of existing images in the output directory. Default is false.")
-	flag.IntVar(&imageQuality, "q", 80, "Image quality 1-100 inclusive.")
-	flag.IntVar(&workerCount, "w", 5, "Width of the pipeline or number of workers per pipeline stage.")
-	flag.Parse()
+	opt := NewOptions()
+	opt.AddFlags(pflag.CommandLine)
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	pflag.Parse()
 
-	if len(imageSizes) == 0 || len(inputGlob) == 0 || len(outputDir) == 0 || imageQuality < 1 || imageQuality > 100 || workerCount < 1 {
-		flag.PrintDefaults()
-		os.Exit(2)
+	if !opt.Valid() {
+		pflag.PrintDefaults()
+		os.Exit(1)
 	}
 
-	if err := createOutputDirIfNotExist(outputDir); err != nil {
+	if err := createOutputDirIfNotExist(opt.OutputDir); err != nil {
 		log.Fatal(err)
 	}
 
 	// find all input files
-	inputFiles, err := filepath.Glob(inputGlob)
+	inputFiles, err := filepath.Glob(opt.InputGlob)
 	if err != nil {
-		log.Fatalf("Error parsing input glob, %q: %v", inputGlob, err)
+		log.Fatalf("Error parsing input glob, %q: %v", opt.InputGlob, err)
 	} else if len(inputFiles) == 0 {
-		log.Fatalf("No files found for input glob, %q", inputGlob)
+		log.Fatalf("No files found for input glob, %q", opt.InputGlob)
 	}
 
 	// Start Progress Bar
-	bar := pb.StartNew(len(inputFiles) * len(imageSizes))
+	bar := pb.StartNew(len(inputFiles) * len(opt.ImageSizes))
 
 	done := make(chan struct{})
 	errc := make(chan error)
@@ -75,11 +66,11 @@ func main() {
 	// Step One: Open Valid Input Image
 	inputFileCh := QueueImages(done, inputFiles...)
 
-	abortAllSizes := func() { bar.Add(len(imageSizes)) }
+	abortAllSizes := func() { bar.Add(len(opt.ImageSizes)) }
 	inputImageCh := make(chan *ImageInput)
 	var inputWg sync.WaitGroup
-	inputWg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
+	inputWg.Add(opt.WorkerCount)
+	for i := 0; i < opt.WorkerCount; i++ {
 		go func() {
 			OpenImages(done, abortCh(abortAllSizes), inputFileCh, inputImageCh)
 			inputWg.Done()
@@ -94,10 +85,10 @@ func main() {
 	abortOne := func() { bar.Increment() }
 	readyImageCh := make(chan *ImageOutput)
 	var sizeWg sync.WaitGroup
-	sizeWg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
+	sizeWg.Add(opt.WorkerCount)
+	for i := 0; i < opt.WorkerCount; i++ {
 		go func() {
-			ReadyImages(done, abortCh(abortOne), inputImageCh, readyImageCh, outputDir, forceSave, imageSizes...)
+			ReadyImages(done, abortCh(abortOne), inputImageCh, readyImageCh, opt.OutputDir, opt.ForceSave, opt.ImageSizes...)
 			sizeWg.Done()
 		}()
 	}
@@ -109,8 +100,8 @@ func main() {
 	// Step Three: Resize to Fit
 	resizedImageCh := make(chan *ImageOutput)
 	var resizeWg sync.WaitGroup
-	resizeWg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
+	resizeWg.Add(opt.WorkerCount)
+	for i := 0; i < opt.WorkerCount; i++ {
 		go func() {
 			ResizeImages(done, readyImageCh, resizedImageCh)
 			resizeWg.Done()
@@ -123,10 +114,10 @@ func main() {
 
 	// Step Four: Save Image (end of pipeline)
 	var savedWg sync.WaitGroup
-	savedWg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
+	savedWg.Add(opt.WorkerCount)
+	for i := 0; i < opt.WorkerCount; i++ {
 		go func() {
-			SaveImages(done, errc, resizedImageCh, successCh, imageQuality)
+			SaveImages(done, errc, resizedImageCh, successCh, opt.ImageQuality)
 			savedWg.Done()
 		}()
 	}
