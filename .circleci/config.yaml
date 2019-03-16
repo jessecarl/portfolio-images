@@ -1,0 +1,19 @@
+default: &default
+  docker:
+    - image: r.j3ss.co/img
+
+version: 2
+jobs:
+  build:
+    <<: *default
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run: |
+          img build -t jessecarl/portfolio-images .
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - build
